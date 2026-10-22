@@ -13,7 +13,7 @@
 
 ARG SPACEBAR_COMMIT=8ab020db8de9a4eb09d00d591ceb56fa3a1464b2
 
-FROM node:24-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS build
+FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS build
 ARG SPACEBAR_COMMIT
 # git for the fetch; python3, make and g++ only for a native module with no prebuilt binary.
 RUN apt-get update \
@@ -43,7 +43,7 @@ RUN npm prune --omit=dev \
             node_modules/.bin dist/src.tsbuildinfo \
   && find node_modules -name '*.map' -type f -delete
 
-FROM node:24-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS runtime
+FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS runtime
 ARG SPACEBAR_COMMIT
 LABEL org.opencontainers.image.source="https://github.com/Crit-Fumble/cfg-platform-spacebar" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
