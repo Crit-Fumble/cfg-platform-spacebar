@@ -1,0 +1,58 @@
+name: CI
+
+# Build the image and prove it end to end on both architectures it ships for: Spacebar's bundle and
+# gateway on the unix event bus, members on open gateway sessions, every channel and guild event
+# reaching whom it should (test/run.sh).
+#
+# The `test` job is the one check to require: it passes only when every smoke leg passed.
+# release.yml waits for it on the commit it publishes, and main's branch protection requires it.
+
+on:
+  push:
+    branches: [main, next]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    # npm ci plus tsc in the build is a few minutes; without a cap a hang runs to GitHub's 6 h
+    # default and never reports, so CI would gate nothing.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: cfg-platform-spacebar:ci
+          cache-from: type=gha,scope=ci-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=ci-${{ matrix.arch }}
+      - name: Smoke test (channel and guild events on the unix bus)
+        env:
+          IMAGE: cfg-platform-spacebar:ci
+        run: test/run.sh
+
+  test:
+    needs: smoke
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every smoke leg passed
+        env:
+          RESULT: ${{ needs.smoke.result }}
+        run: |
+          echo "smoke: $RESULT"
+          [ "$RESULT" = "success" ]
