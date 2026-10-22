@@ -4,8 +4,8 @@ name: release
 # ghcr.io/crit-fumble/cfg-platform-spacebar, on a `v*` tag of a promoted commit whose CI `test`
 # check passed (both architectures smoke-tested).
 #
-# Tags per build: the git tag (v0.1.0), sha-<short>, and `latest` on a v* tag.
-# ⚠️ A package's first publish creates it PRIVATE (CONTRIBUTING.md, "Releasing").
+# Tags per build: the git tag (v0.1.0), sha-<short>, and `latest` on a v* tag. The package is
+# public, like the repository, so it pulls with no credentials.
 
 on:
   push:

@@ -27,10 +27,8 @@ The `node:24-slim` base is pinned by digest in both `FROM` lines; Dependabot pro
 Promote `next` to `main` by fast-forward, then tag the promoted commit `vX.Y.Z`. `release.yml`
 publishes only a tag on `main` whose CI `test` check passed (amd64 and arm64).
 
-⚠️ **The first release creates the package private.** Nothing can pull it anonymously until an
-organization owner opens
-<https://github.com/orgs/Crit-Fumble/packages/container/cfg-platform-spacebar/settings>, chooses
-**Change visibility**, then **Public**. Check, with no credentials (prints `200`):
+The package takes this repository's public visibility, so anyone can pull it without
+credentials. To confirm a release (prints `200`):
 
 ```bash
 T=$(curl -s "https://ghcr.io/token?scope=repository:crit-fumble/cfg-platform-spacebar:pull" | jq -r .token)
