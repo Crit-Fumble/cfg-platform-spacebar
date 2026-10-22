@@ -1,0 +1,117 @@
+From 31bbe6550f972b213e27e19cb52831d848cb5734 Mon Sep 17 00:00:00 2001
+From: Crit-Fumble <noreply@crit-fumble.com>
+Date: Wed, 21 Oct 2026 20:12:37 -0500
+Subject: [PATCH 4/4] fix(gateway): a guild joined or left mid-session is
+ subscribed and cancelled like one at IDENTIFY
+
+GUILD_CREATE for a join and GUILD_DELETE for a leave, kick or ban are keyed by
+the member's user, so the consumer's `id` is the user, not the guild:
+
+- GUILD_CREATE subscribed every channel with no VIEW_CHANNEL check (a member
+  who joined while connected received channels hidden from them), never
+  subscribed to the guild (no CHANNEL_CREATE from it), never cached the
+  member's permission (later channel events fell back to ADMINISTRATOR), and
+  added a duplicate user listener.
+- GUILD_DELETE cancelled the session's own user listener and left the guild's
+  and its channels' listeners (a member who left, or was kicked or banned,
+  kept receiving the guild until a reconnect). Its ban lookup used the user id
+  as the guild id, so it never recorded the IP.
+
+Use data.id as the guild in both. On a join, cache the member's permission
+(retrying while the member row is saved alongside the event; failing closed
+if it cannot be read), subscribe to the guild and to the channels the member
+can see. On a leave, cancel the guild's and its channels' listeners and drop
+the cached permission.
+---
+ src/gateway/listener/listener.ts | 45 +++++++++++++++++++++++++-------
+ 1 file changed, 36 insertions(+), 9 deletions(-)
+
+diff --git a/src/gateway/listener/listener.ts b/src/gateway/listener/listener.ts
+index 1b77417..8660c3a 100644
+--- a/src/gateway/listener/listener.ts
++++ b/src/gateway/listener/listener.ts
+@@ -18,10 +18,10 @@
+ 
+ import { Channel as AMQChannel } from "amqplib";
+ import { bgRedBright } from "picocolors";
+-import { Ban, Member, Message, Recipient, Relationship } from "@spacebar/database";
++import { Ban, Channel, Member, Message, Recipient, Relationship } from "@spacebar/database";
+ import { EVENTEnum, EventOpts, getPermission, listenEvent, ListenEventOpts, NewUrlUserSignatureData, Permissions, RabbitMQ } from "@spacebar/util";
+ import { WebSocket } from "@spacebar/gateway";
+-import { PublicMember, RelationshipType } from "@spacebar/schemas";
++import { ChannelPermissionOverwrite, PublicMember, RelationshipType } from "@spacebar/schemas";
+ import { CLOSECODES, OPCODES, Send } from "../util";
+ 
+ // TODO: close connection on Invalidated Token
+@@ -247,12 +247,23 @@ async function consume(this: WebSocket, opts: EventOpts) {
+             break;
+         }
+         case "RELATIONSHIP_REMOVE":
+-        case "GUILD_DELETE":
+             this.events[id]?.();
+             delete this.events[id];
+-            if (event === "GUILD_DELETE" && this.ipAddress) {
++            break;
++        case "GUILD_DELETE": {
++            // A leave, kick or ban is keyed by the member's user, a guild delete by the guild: `data.id` is the
++            // guild either way. Cancel the guild's listener and its channels', not the session's user listener.
++            const guildId = data.id ?? id;
++            const channels = await Channel.find({ where: { guild_id: guildId }, select: { id: true } });
++            for (const key of [guildId, ...channels.map((c) => c.id)]) {
++                const cancel = this.events[key];
++                delete this.events[key];
++                await cancel?.();
++            }
++            delete this.permissions[guildId];
++            if (this.ipAddress) {
+                 const ban = await Ban.findOne({
+-                    where: { guild_id: id, user_id: this.user_id },
++                    where: { guild_id: guildId, user_id: this.user_id },
+                 });
+ 
+                 if (ban) {
+@@ -261,6 +272,7 @@ async function consume(this: WebSocket, opts: EventOpts) {
+                 }
+             }
+             break;
++        }
+         case "CHANNEL_CREATE": {
+             // Keyed by the guild (or, for a DM, by each recipient), so `id` is not the new channel:
+             // subscribe to `data.id`, or its messages reach nobody until a reconnect.
+@@ -272,14 +284,29 @@ async function consume(this: WebSocket, opts: EventOpts) {
+         case "RELATIONSHIP_ADD":
+             this.events[data.user.id] = await listenEvent(data.user.id, handlePresenceUpdate.bind(this), this.listen_options);
+             break;
+-        case "GUILD_CREATE":
++        case "GUILD_CREATE": {
++            // A join is keyed by the joining user: `data.id` is the guild. Subscribe as IDENTIFY does, to the guild
++            // and to the channels the member can see, with the member's permission cached for later channel events.
++            const guildId = data.id ?? id;
++            let guildPermission: Permissions | undefined;
++            // The member row is saved alongside this event, so it may not be readable yet.
++            for (let attempt = 0; !guildPermission && attempt < 20; attempt++) {
++                guildPermission = await getPermission(this.user_id, guildId).catch(() => undefined);
++                if (!guildPermission) await new Promise((resolve) => setTimeout(resolve, 100));
++            }
++            // Unreadable after 2 s: subscribe to no channel and fail closed until a reconnect.
++            this.permissions[guildId] = guildPermission ?? new Permissions();
++            const visible = (data.channels ?? []).filter((channel: { id: string; permission_overwrites?: ChannelPermissionOverwrite[] }) =>
++                this.permissions[guildId].overwriteChannel(channel.permission_overwrites ?? []).has("VIEW_CHANNEL"),
++            );
+             await Promise.all([
+-                ...data.channels.map(async ({ id }: { id: string }) => {
+-                    this.events[id] = await listenEvent(id, consumer, listenOpts);
++                ...visible.map(async ({ id: channelId }: { id: string }) => {
++                    if (!this.events[channelId]) this.events[channelId] = await listenEvent(channelId, consumer, listenOpts);
+                 }),
+-                listenEvent(id, consumer, listenOpts).then((ret) => (this.events[id] = ret)),
++                this.events[guildId] ? undefined : listenEvent(guildId, consumer, listenOpts).then((ret) => (this.events[guildId] = ret)),
+             ]);
+             break;
++        }
+         case "CHANNEL_UPDATE": {
+             // A thread's update carries no overwrites of its own, so it cannot be judged here: leave its
+             // subscription as it is.
+-- 
+2.54.0 (Apple Git-157)
+

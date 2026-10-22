@@ -1,0 +1,83 @@
+# The smoke stack: the image under test as Spacebar's bundle and its standalone gateway, on the unix
+# event bus, with a throwaway Postgres. CI (and you) run test/run.sh, which brings it up, runs
+# channel-events.mjs against it and tears it down.
+#
+# The same shape as Crit-Fumble's production compose: the gateway under `init: true` and the bundle
+# not (the event socket is named by PID, and both node processes would otherwise be PID 1), one
+# shared /data (the JWT keypair) and one shared socket directory. spacebar-config.json sets only the
+# endpoints Spacebar refuses to start without; it fills every other key with its default. Read-only,
+# with CONFIG_READONLY, so a run never writes back into this repository.
+name: cfg-platform-spacebar-smoke
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: spacebar
+      POSTGRES_PASSWORD: spacebar
+      POSTGRES_DB: spacebar
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U spacebar -d spacebar']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  bundle:
+    image: ${IMAGE:-cfg-platform-spacebar:dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: &env
+      DATABASE: 'postgres://spacebar:spacebar@postgres:5432/spacebar'
+      PORT: '3001'
+      MAIL_ENABLED: 'false'
+      SENTRY_ENABLED: 'false'
+      EVENT_TRANSMISSION: 'unix'
+      EVENT_SOCKET_PATH: '/run/spacebar/'
+      CONFIG_PATH: '/config/spacebar-config.json'
+      CONFIG_READONLY: 'true'
+    tmpfs:
+      - /tmp
+    volumes:
+      - data:/data
+      - ipc:/run/spacebar
+      - ./spacebar-config.json:/config/spacebar-config.json:ro
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:3001/api/ping').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+
+  gateway:
+    image: ${IMAGE:-cfg-platform-spacebar:dev}
+    command: ['/bin/start-gateway']
+    init: true
+    depends_on:
+      bundle:
+        condition: service_healthy
+    environment:
+      <<: *env
+      PORT: '3002'
+    tmpfs:
+      - /tmp
+    volumes:
+      - data:/data
+      - ipc:/run/spacebar
+      - ./spacebar-config.json:/config/spacebar-config.json:ro
+
+  probe:
+    image: ${IMAGE:-cfg-platform-spacebar:dev}
+    profiles: [probe]
+    depends_on:
+      gateway:
+        condition: service_started
+    command: ['node', '/test/channel-events.mjs']
+    environment:
+      SPACEBAR_API: 'http://bundle:3001/api/v9'
+      SPACEBAR_GATEWAY: 'ws://gateway:3002/?encoding=json&v=9'
+    volumes:
+      - ./:/test:ro
+
+volumes:
+  data:
+  ipc:

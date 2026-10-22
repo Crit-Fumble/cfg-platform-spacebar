@@ -1,0 +1,62 @@
+From fb13e9581f9b472cad2ec6c6465473488bfd8450 Mon Sep 17 00:00:00 2001
+From: Crit-Fumble <noreply@crit-fumble.com>
+Date: Wed, 21 Oct 2026 20:11:28 -0500
+Subject: [PATCH 2/4] fix(gateway): a channel overwrite change subscribes or
+ unsubscribes the open session by the channel
+
+CHANNEL_UPDATE's consumer used `id`, the event's routing key, for both the
+permission lookup and the listener it changes:
+
+- this.permissions holds guild keys only, so for a channel-keyed update the
+  check fell back to ADMINISTRATOR. No overwrite takes VIEW_CHANNEL from that,
+  so a member denied a channel kept receiving its messages on an open session
+  (REST already answered 403) until a reconnect.
+- The reorder route keys the update by the guild. There `exists` is the guild
+  listener, and on a hidden channel opts.cancel(id) cancelled the session's
+  guild listener: the member stopped getting the guild's events, new channels
+  included, until a reconnect.
+
+Judge VIEW_CHANNEL with the member's permission in data.guild_id and subscribe
+or cancel data.id's listener. Threads carry no overwrites of their own, so
+their updates leave subscriptions alone, as before.
+---
+ src/gateway/listener/listener.ts | 20 +++++++++++++++-----
+ 1 file changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/src/gateway/listener/listener.ts b/src/gateway/listener/listener.ts
+index aff7d83..1b77417 100644
+--- a/src/gateway/listener/listener.ts
++++ b/src/gateway/listener/listener.ts
+@@ -281,14 +281,24 @@ async function consume(this: WebSocket, opts: EventOpts) {
+             ]);
+             break;
+         case "CHANNEL_UPDATE": {
+-            const exists = this.events[id];
+-            if (permission.overwriteChannel(data.permission_overwrites).has("VIEW_CHANNEL")) {
++            // A thread's update carries no overwrites of its own, so it cannot be judged here: leave its
++            // subscription as it is.
++            if ([10, 11, 12].includes(data.type)) break;
++            // Judge the channel by the member's permission in its guild, the check the session makes for every
++            // channel at IDENTIFY. `this.permissions[id]` is set only for a guild key, so a channel-keyed update
++            // fell back to ADMINISTRATOR, which no overwrite can take VIEW_CHANNEL from.
++            const channelId = data.id ?? id;
++            const base = (data.guild_id && this.permissions[data.guild_id]) || permission;
++            const exists = this.events[channelId];
++            if (base.overwriteChannel(data.permission_overwrites).has("VIEW_CHANNEL")) {
+                 if (exists) break;
+-                this.events[id] = await listenEvent(id, consumer, listenOpts);
++                this.events[channelId] = await listenEvent(channelId, consumer, listenOpts);
+             } else {
+                 if (!exists) return; // return -> do not send channel update events for hidden channels
+-                opts.cancel(id);
+-                delete this.events[id];
++                // Cancel the channel's own listener. opts.cancel cancels whichever listener delivered this event,
++                // which for a guild-keyed update is the session's guild listener.
++                delete this.events[channelId];
++                await exists();
+             }
+             break;
+         }
+-- 
+2.54.0 (Apple Git-157)
+

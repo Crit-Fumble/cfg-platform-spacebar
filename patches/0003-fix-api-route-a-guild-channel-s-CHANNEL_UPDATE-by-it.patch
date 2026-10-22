@@ -1,0 +1,67 @@
+From 7acc8dfed5bd0df141c6dbf1e25a0a98942ee142 Mon Sep 17 00:00:00 2001
+From: Crit-Fumble <noreply@crit-fumble.com>
+Date: Wed, 21 Oct 2026 20:11:54 -0500
+Subject: [PATCH 3/4] fix(api): route a guild channel's CHANNEL_UPDATE by its
+ guild
+
+The overwrite routes (PUT and DELETE /channels/:id/permissions/:overwrite_id),
+the channel PATCH and the category-delete reparent key CHANNEL_UPDATE by the
+channel. Only sessions already subscribed to the channel receive it, so a
+member who cannot see a channel never hears that it was revealed: hide a
+channel and show it again, or show one hidden at IDENTIFY, and the member's
+open session stays deaf to it until a reconnect.
+
+Key them by the guild as well, as the reorder route already does. Every
+member's session then receives the update, and the gateway's CHANNEL_UPDATE
+handler subscribes or unsubscribes by the member's permission, and sends
+nothing to a member who cannot see the channel. A thread's PATCH stays keyed by
+the thread.
+---
+ src/api/routes/channels/#channel_id/index.ts       | 3 +++
+ src/api/routes/channels/#channel_id/permissions.ts | 2 ++
+ 2 files changed, 5 insertions(+)
+
+diff --git a/src/api/routes/channels/#channel_id/index.ts b/src/api/routes/channels/#channel_id/index.ts
+index 486e8b3..a5baf40 100644
+--- a/src/api/routes/channels/#channel_id/index.ts
++++ b/src/api/routes/channels/#channel_id/index.ts
+@@ -112,6 +112,7 @@ router.delete(
+                             event: "CHANNEL_UPDATE",
+                             data: c.toJSON(),
+                             channel_id: c.id,
++                            guild_id: c.guild_id,
+                         } satisfies ChannelUpdateEvent),
+                     ]);
+                 }
+@@ -237,6 +238,8 @@ router.patch(
+                 event: "CHANNEL_UPDATE",
+                 data: channel.toJSON(),
+                 channel_id,
++                // A thread stays keyed by the thread: its update carries no overwrites to judge it by.
++                guild_id: channel.isThread() ? undefined : channel.guild_id,
+             } satisfies ChannelUpdateEvent),
+         ]);
+ 
+diff --git a/src/api/routes/channels/#channel_id/permissions.ts b/src/api/routes/channels/#channel_id/permissions.ts
+index 6776697..1a04b3a 100644
+--- a/src/api/routes/channels/#channel_id/permissions.ts
++++ b/src/api/routes/channels/#channel_id/permissions.ts
+@@ -73,6 +73,7 @@ router.put(
+             emitEvent({
+                 event: "CHANNEL_UPDATE",
+                 channel_id,
++                guild_id: channel.guild_id,
+                 data: channel.toJSON(),
+             } satisfies ChannelUpdateEvent),
+         ]);
+@@ -97,6 +98,7 @@ router.delete("/:overwrite_id", route({ permission: "MANAGE_ROLES", responses: {
+         emitEvent({
+             event: "CHANNEL_UPDATE",
+             channel_id,
++            guild_id: channel.guild_id,
+             data: channel.toJSON(),
+         } satisfies ChannelUpdateEvent),
+     ]);
+-- 
+2.54.0 (Apple Git-157)
+

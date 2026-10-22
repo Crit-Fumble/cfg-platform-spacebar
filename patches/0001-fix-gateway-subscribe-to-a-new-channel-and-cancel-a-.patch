@@ -1,0 +1,65 @@
+From a75b939cfe2322be3879494b12bba44ce4583899 Mon Sep 17 00:00:00 2001
+From: Crit-Fumble <noreply@crit-fumble.com>
+Date: Wed, 21 Oct 2026 20:11:15 -0500
+Subject: [PATCH 1/4] fix(gateway): subscribe to a new channel, and cancel a
+ deleted one, by the channel's own id
+
+The consumer's `id` is the event's routing key, not necessarily the channel:
+
+- CHANNEL_CREATE for a guild channel is keyed by the guild, and for a DM or
+  group DM by each recipient. The gateway called listenEvent(id) on that key,
+  so it never subscribed to the new channel (its messages reached no open
+  session until a reconnect) and added a duplicate guild or user listener that
+  is never cancelled. Subscribe to data.id instead, checking VIEW_CHANNEL with
+  the member's permission in data.guild_id.
+- CHANNEL_DELETE for closing a DM or leaving a group DM is keyed by the user.
+  Cancelling this.events[id] cancelled the session's own user listener (no more
+  new DMs or guild joins until a reconnect) and left the channel's listener (a
+  member who left a group DM kept receiving it). Cancel data.id's listener.
+---
+ src/gateway/listener/listener.ts | 20 ++++++++++++++++----
+ 1 file changed, 16 insertions(+), 4 deletions(-)
+
+diff --git a/src/gateway/listener/listener.ts b/src/gateway/listener/listener.ts
+index b2b7fbf..aff7d83 100644
+--- a/src/gateway/listener/listener.ts
++++ b/src/gateway/listener/listener.ts
+@@ -237,8 +237,16 @@ async function consume(this: WebSocket, opts: EventOpts) {
+             if (!this.member_events[data.user.id]) break;
+             await this.member_events[data.user.id]();
+             break;
++        case "CHANNEL_DELETE": {
++            // Closing a DM and leaving a group DM are keyed by the user, so `id` is the session's own user:
++            // cancel the deleted channel's listener (`data.id`), not the user's.
++            const channelId = data.id ?? id;
++            const cancel = this.events[channelId];
++            delete this.events[channelId];
++            await cancel?.();
++            break;
++        }
+         case "RELATIONSHIP_REMOVE":
+-        case "CHANNEL_DELETE":
+         case "GUILD_DELETE":
+             this.events[id]?.();
+             delete this.events[id];
+@@ -253,10 +261,14 @@ async function consume(this: WebSocket, opts: EventOpts) {
+                 }
+             }
+             break;
+-        case "CHANNEL_CREATE":
+-            if (!permission.overwriteChannel(data.permission_overwrites).has("VIEW_CHANNEL")) return;
+-            this.events[id] = await listenEvent(id, consumer, listenOpts);
++        case "CHANNEL_CREATE": {
++            // Keyed by the guild (or, for a DM, by each recipient), so `id` is not the new channel:
++            // subscribe to `data.id`, or its messages reach nobody until a reconnect.
++            const channelPermission = (data.guild_id && this.permissions[data.guild_id]) || permission;
++            if (!channelPermission.overwriteChannel(data.permission_overwrites).has("VIEW_CHANNEL")) return;
++            if (!this.events[data.id]) this.events[data.id] = await listenEvent(data.id, consumer, listenOpts);
+             break;
++        }
+         case "RELATIONSHIP_ADD":
+             this.events[data.user.id] = await listenEvent(data.user.id, handlePresenceUpdate.bind(this), this.listen_options);
+             break;
+-- 
+2.54.0 (Apple Git-157)
+

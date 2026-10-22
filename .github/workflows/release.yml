@@ -1,0 +1,112 @@
+name: release
+
+# Build the image for linux/amd64 and linux/arm64 and push it to
+# ghcr.io/crit-fumble/cfg-platform-spacebar, on a `v*` tag of a promoted commit whose CI `test`
+# check passed (both architectures smoke-tested).
+#
+# Tags per build: the git tag (v0.1.0), sha-<short>, and `latest` on a v* tag.
+# ⚠️ A package's first publish creates it PRIVATE (CONTRIBUTING.md, "Releasing").
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v0.1.0). Checked out and built, and used as the image tag.'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Gate the publish: only a commit on main whose CI `test` passed. Cheap — it asks, it does not re-run.
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Tag is on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::$(git rev-parse HEAD) is not on main. Release promoted commits only."
+            exit 1
+          fi
+          echo "commit is on main"
+
+      # The promotion push and the tag push land seconds apart, so CI may not have reported yet:
+      # absent or in flight means wait; only a resolved non-success is fatal.
+      - name: CI passed for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA=$(git rev-parse HEAD)
+          DEADLINE=$(( $(date +%s) + 2400 ))
+          while :; do
+            RUNS=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs" --jq '[.check_runs[] | select(.name == "test")]')
+            if [ "$(echo "$RUNS" | jq 'any(.[]; .conclusion == "success")')" = "true" ]; then
+              echo "CI test check is green for $SHA"
+              exit 0
+            fi
+            BAD=$(echo "$RUNS" | jq -r '[.[] | select(.conclusion != null and .conclusion != "success") | .conclusion] | join(", ")')
+            if [ -n "$BAD" ]; then
+              echo "::error::CI 'test' for $SHA concluded: $BAD. Nothing untested is published."
+              exit 1
+            fi
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "::error::timed out after 40m waiting for CI 'test' on $SHA. Was the commit pushed to main?"
+              exit 1
+            fi
+            echo "waiting for CI 'test' on ${SHA:0:8}…"
+            sleep 30
+          done
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    # arm64 builds under QEMU, so this is the slow job.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          context: git
+          images: ghcr.io/crit-fumble/cfg-platform-spacebar
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=sha,prefix=sha-,format=short
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # CI's per-architecture caches, read-only: a tag's own cache could not be read by the next tag.
+          cache-from: |
+            type=gha,scope=ci-amd64
+            type=gha,scope=ci-arm64

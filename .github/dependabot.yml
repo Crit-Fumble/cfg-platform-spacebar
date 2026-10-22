@@ -1,0 +1,18 @@
+version: 2
+
+updates:
+  # The node base, pinned by digest in both FROM lines of the Dockerfile.
+  - package-ecosystem: docker
+    directory: /
+    # The RC branch: `main` is only ever fast-forwarded to.
+    target-branch: next
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: next
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']

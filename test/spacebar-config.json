@@ -1,0 +1,6 @@
+{
+    "general": { "serverName": "http://bundle:3001" },
+    "api": { "endpointPublic": "http://bundle:3001/api/v9" },
+    "cdn": { "endpointPublic": "http://bundle:3001/", "endpointPrivate": "http://bundle:3001/" },
+    "gateway": { "endpointPublic": "ws://gateway:3002/" }
+}
