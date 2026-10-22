@@ -8,6 +8,11 @@ updates:
     target-branch: next
     schedule:
       interval: weekly
+    ignore:
+      # Node majors move by hand, to the next LTS line that upstream Spacebar builds on (nodejs_24 today);
+      # Dependabot still bumps the digest within 24.
+      - dependency-name: node
+        update-types: ['version-update:semver-major']
   - package-ecosystem: github-actions
     directory: /
     target-branch: next
