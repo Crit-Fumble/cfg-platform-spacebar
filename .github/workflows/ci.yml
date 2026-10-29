@@ -32,6 +32,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
+        with:
+          # Pinned: the default, buildx-stable-1, still trusts the compromised eMudhra intermediates (cfg-core-dev-tools#820).
+          driver-opts: image=moby/buildkit:v0.34.1-ubuntu@sha256:4f105b796772937ff4e2ce05c528342676086cd21a706d81f2ba681c127994b9
       - name: Build
         uses: docker/build-push-action@v7
         with:
