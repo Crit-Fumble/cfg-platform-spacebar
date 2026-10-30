@@ -9,8 +9,7 @@ updates:
     schedule:
       interval: weekly
     ignore:
-      # Node majors move by hand, to the next LTS line that upstream Spacebar builds on (nodejs_24 today);
-      # Dependabot still bumps the digest within 24.
+      # Node majors move by hand, to the next LTS line that upstream Spacebar builds on (nodejs_24 today).
       - dependency-name: node
         update-types: ['version-update:semver-major']
   - package-ecosystem: github-actions
