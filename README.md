@@ -34,6 +34,12 @@ carries those versions, so it is not offered upstream; it goes when `SPACEBAR_CO
 Two advisories stay in `npm audit`, neither with a fix in range and neither reachable here: zod, through
 jimp, which only scales a proxied image to two integers; and nodemailer, since mail is off.
 
+`0006` removes upstream's own patch-package patches for body-parser and typescript-json-schema. They were
+made for 2.2.2 and 0.67.4 and have not applied since upstream's lockfile moved past those versions, so
+Spacebar here (and upstream) parses request bodies with `JSON.parse`, not json-bigint, and generates no
+`bigint` schema type. The build runs `npm ci` with `CI=true`, so a patch-package patch that stops applying
+fails the build instead of shipping without it.
+
 `test/channel-events.mjs` holds a check for each: upstream at the pinned commit fails every patch's
 checks, and this image passes them all.
 
