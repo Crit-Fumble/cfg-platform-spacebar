@@ -5,6 +5,7 @@
 // Each check names the patch that makes it pass. A check named "guard" passes on upstream too: it
 // holds a fix to what the patches must not break. Upstream at the pinned commit fails every patch's
 // checks; the image with all of patches/ passes them all.
+import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 const require = createRequire('/app/package.json')
 const WebSocket = require('ws')
@@ -103,6 +104,18 @@ async function deliver(user, channelId, sessions, ms = 4_000) {
 }
 const one = async (user, channelId, session, ms) => (await deliver(user, channelId, [session], ms))[0]
 const overwrite = (target, type, allow, deny) => ({ id: target, type, allow, deny })
+
+// 0005: each package that carried an advisory is at or past the release that fixes it.
+const FLOORS = { multer: '2.5.0', 'body-parser': '2.4.0', 'proxy-addr': '2.0.8', undici: '7.30.1' }
+const atLeast = (version, floor) => {
+  const [v, f] = [version, floor].map((s) => s.split('.').map(Number))
+  for (let i = 0; i < 3; i++) if (v[i] !== f[i]) return v[i] > f[i]
+  return true
+}
+for (const [pkg, floor] of Object.entries(FLOORS)) {
+  const { version } = JSON.parse(readFileSync(`/app/node_modules/${pkg}/package.json`, 'utf8'))
+  check(`${pkg} ${version} is at or past ${floor} (0005)`, true, atLeast(version, floor))
+}
 
 const sessions = []
 try {
