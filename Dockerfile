@@ -34,7 +34,9 @@ RUN set -e; for p in /patches/*.patch; do \
       echo "applied $(basename "$p")"; \
     done
 # Upstream's own postinstall (patch-package) and prepare (husky) run here, as in its nix build.
-RUN npm ci
+# CI=true makes patch-package exit 1 when one of upstream's patches/ no longer applies; without it,
+# patch-package only prints the error and the image ships without that patch.
+RUN CI=true npm ci
 RUN npm run build
 # prune keeps devOptional packages (typescript, ts-node and friends are optional peers of runtime
 # deps); upstream's nix build drops them too. Package LICENSE files stay.

@@ -14,7 +14,7 @@ port 3001. Unlike upstream's image, `node` is on `PATH`.
 
 ## The patches
 
-All four fix the same confusion in the gateway: an event's routing key (its guild, channel or user) is
+`0001` to `0004` fix the same confusion in the gateway: an event's routing key (its guild, channel or user) is
 not always the thing the event is about. Each one is written to be offered upstream as it stands.
 
 | Patch | What it fixes on an open gateway session |
@@ -27,6 +27,18 @@ not always the thing the event is about. Each one is written to be offered upstr
 What they do not change: a permission change that comes through a role (a role granted, removed or
 edited) takes effect on open sessions at their next reconnect, as upstream. A thread created after a
 session connected stays silent to it until a reconnect, as upstream.
+
+`0005` refreshes upstream's lockfile, inside the ranges its `package.json` allows, past the releases
+that fix the advisories in multer, body-parser, proxy-addr and undici. Upstream's master already
+carries those versions, so it is not offered upstream; it goes when `SPACEBAR_COMMIT` moves past them.
+Two advisories stay in `npm audit`, neither with a fix in range and neither reachable here: zod, through
+jimp, which only scales a proxied image to two integers; and nodemailer, since mail is off.
+
+`0006` removes upstream's own patch-package patches for body-parser and typescript-json-schema. They were
+made for 2.2.2 and 0.67.4 and have not applied since upstream's lockfile moved past those versions, so
+Spacebar here (and upstream) parses request bodies with `JSON.parse`, not json-bigint, and generates no
+`bigint` schema type. The build runs `npm ci` with `CI=true`, so a patch-package patch that stops applying
+fails the build instead of shipping without it.
 
 `test/channel-events.mjs` holds a check for each: upstream at the pinned commit fails every patch's
 checks, and this image passes them all.

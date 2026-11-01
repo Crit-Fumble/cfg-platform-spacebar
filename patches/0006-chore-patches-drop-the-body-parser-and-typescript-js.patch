@@ -1,0 +1,89 @@
+From 13b3dcd5b771c8151395beeabc53abb67f571d2c Mon Sep 17 00:00:00 2001
+From: Crit-Fumble <noreply@crit-fumble.com>
+Date: Sat, 31 Oct 2026 20:20:12 -0500
+Subject: [PATCH] chore(patches): drop the body-parser and
+ typescript-json-schema patches that no longer apply
+
+patch-package has failed on both since the lockfile moved to body-parser 2.3.0
+and typescript-json-schema 0.68.0 (they were made for 2.2.2 and 0.67.4).
+Outside CI it prints the failure and exits 0, so every install since then has
+run without them: request bodies parse with JSON.parse, not json-bigint, and
+the schema generator emits no "bigint" type. Removing the files records that
+behavior instead of carrying patches that never apply, and lets
+`patch-package --error-on-fail` pass. Bringing json-bigint back is a separate
+change: re-made patches for the current versions, tested across the API.
+---
+ patches/body-parser+2.2.2.patch             | 39 ---------------------
+ patches/typescript-json-schema+0.67.4.patch | 14 --------
+ 2 files changed, 53 deletions(-)
+ delete mode 100644 patches/body-parser+2.2.2.patch
+ delete mode 100644 patches/typescript-json-schema+0.67.4.patch
+
+diff --git a/patches/body-parser+2.2.2.patch b/patches/body-parser+2.2.2.patch
+deleted file mode 100644
+index 6d4f5dd..0000000
+--- a/patches/body-parser+2.2.2.patch
++++ /dev/null
+@@ -1,39 +0,0 @@
+-diff --git a/node_modules/body-parser/lib/types/json.js b/node_modules/body-parser/lib/types/json.js
+-index 23c7357..0243133 100644
+---- a/node_modules/body-parser/lib/types/json.js
+-+++ b/node_modules/body-parser/lib/types/json.js
+-@@ -15,6 +15,7 @@
+- var debug = require('debug')('body-parser:json')
+- var read = require('../read')
+- var { normalizeOptions } = require('../utils')
+-+var JSONbig = require("json-bigint");
+- 
+- /**
+-  * Module exports.
+-@@ -69,7 +70,7 @@ function json (options) {
+- 
+-     try {
+-       debug('parse json')
+--      return JSON.parse(body, reviver)
+-+      return JSONbig.parse(body, reviver)
+-     } catch (e) {
+-       throw normalizeJsonSyntaxError(e, {
+-         message: e.message,
+-@@ -106,7 +107,7 @@ function createStrictSyntaxError (str, char) {
+-   }
+- 
+-   try {
+--    JSON.parse(partial); /* istanbul ignore next */ throw new SyntaxError('strict violation')
+-+    JSONbig.parse(partial); /* istanbul ignore next */ throw new SyntaxError('strict violation')
+-   } catch (e) {
+-     return normalizeJsonSyntaxError(e, {
+-       message: e.message.replace(JSON_SYNTAX_REGEXP, function (placeholder) {
+-@@ -151,7 +152,7 @@ function normalizeJsonSyntaxError (error, obj) {
+-   }
+- 
+-   // replace stack before message for Node.js 0.10 and below
+--  error.stack = obj.stack.replace(error.message, obj.message)
+-+  error.stack = obj.stack?.replace(error.message, obj.message)
+-   error.message = obj.message
+- 
+-   return error
+diff --git a/patches/typescript-json-schema+0.67.4.patch b/patches/typescript-json-schema+0.67.4.patch
+deleted file mode 100644
+index 0a191b0..0000000
+--- a/patches/typescript-json-schema+0.67.4.patch
++++ /dev/null
+@@ -1,14 +0,0 @@
+-diff --git a/node_modules/typescript-json-schema/dist/typescript-json-schema.js b/node_modules/typescript-json-schema/dist/typescript-json-schema.js
+-index e59b11e..9e0e0c4 100644
+---- a/node_modules/typescript-json-schema/dist/typescript-json-schema.js
+-+++ b/node_modules/typescript-json-schema/dist/typescript-json-schema.js
+-@@ -420,6 +420,9 @@ class JsonSchemaGenerator {
+-             else if (flags & ts.TypeFlags.Boolean) {
+-                 definition.type = "boolean";
+-             }
+-+			else if (flags & ts.TypeFlags.BigInt) {
+-+				definition.type = "bigint";
+-+			}
+-             else if (flags & ts.TypeFlags.ESSymbol) {
+-                 definition.type = "object";
+-             }
+-- 
+2.54.0 (Apple Git-157)
+
