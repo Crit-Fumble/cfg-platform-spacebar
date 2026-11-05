@@ -1,0 +1,200 @@
+From 329bc675c2d5dc628c64405bfcfb04a7f716eee3 Mon Sep 17 00:00:00 2001
+From: Crit-Fumble <noreply@crit-fumble.com>
+Date: Thu, 5 Nov 2026 16:15:35 -0600
+Subject: [PATCH] fix(api): a missing ban or member answers 404 like Discord,
+ and the member list carries each member's user
+
+Four guild reads answered differently from Discord, so a bot written against
+Discord's API misread them:
+
+- GET /guilds/:id/bans/:user_id with no ban answered 404 with code 404
+  ("Ban could not be found", from findOneOrFail), and a self-ban answered
+  400 with code 10026. Both now answer 404 with code 10026 Unknown Ban.
+- GET /guilds/:id/members/:user_id for a user who is not a member answered
+  404 with code 404. It now answers 404 with code 10007 Unknown Member.
+  UNKNOWN_MEMBER and UNKNOWN_BAN carry HTTP 404, as Discord's do.
+- GET /guilds/:id/members returned no user object, so a caller could not
+  page by user.id, and selected no roles. An absent `after` became the
+  string "undefined", which the bigint id column refused with a 500. The
+  list now loads each member's public user and role ids, `after` defaults
+  to 0, and a non-numeric `after` is a 400 form error instead of a 500. It
+  still pages by user id, ascending.
+- GET /guilds/:id?with_counts=true ignored with_counts. It now adds
+  approximate_member_count (the guild's members) and
+  approximate_presence_count (members with a session whose status shows:
+  not offline, invisible or unknown, as IDENTIFY filters presences).
+---
+ src/api/routes/guilds/#guild_id/bans.ts       |  6 ++---
+ src/api/routes/guilds/#guild_id/index.ts      | 24 ++++++++++++++++++-
+ .../#guild_id/members/#member_id/index.ts     |  3 ++-
+ .../routes/guilds/#guild_id/members/index.ts  | 20 ++++++++++++----
+ src/util/util/Constants.ts                    |  4 ++--
+ 5 files changed, 45 insertions(+), 12 deletions(-)
+
+diff --git a/src/api/routes/guilds/#guild_id/bans.ts b/src/api/routes/guilds/#guild_id/bans.ts
+index 8217466..7eb0af7 100644
+--- a/src/api/routes/guilds/#guild_id/bans.ts
++++ b/src/api/routes/guilds/#guild_id/bans.ts
+@@ -157,12 +157,12 @@ router.get(
+     async (req: Request, res: Response) => {
+         const { guild_id, user_id } = req.params as { [key: string]: string };
+ 
+-        const ban = (await Ban.findOneOrFail({
++        const ban = (await Ban.findOne({
+             where: { guild_id: guild_id, user_id: user_id },
+-        })) as BanRegistrySchema;
++        })) as BanRegistrySchema | null;
+ 
+-        if (ban.user_id === ban.executor_id) throw DiscordApiErrors.UNKNOWN_BAN;
+         // pretend self-bans don't exist to prevent victim chasing
++        if (!ban || ban.user_id === ban.executor_id) throw DiscordApiErrors.UNKNOWN_BAN;
+ 
+         const user = await User.getPublicUser(ban.user_id);
+ 
+diff --git a/src/api/routes/guilds/#guild_id/index.ts b/src/api/routes/guilds/#guild_id/index.ts
+index a05bf46..ac69657 100644
+--- a/src/api/routes/guilds/#guild_id/index.ts
++++ b/src/api/routes/guilds/#guild_id/index.ts
+@@ -19,7 +19,7 @@
+ import { Request, Response, Router } from "express";
+ import { HTTPError } from "lambert-server/HTTPError";
+ import { route } from "@spacebar/api/middlewares";
+-import { Channel, Guild, Member } from "@spacebar/database";
++import { Channel, Guild, Member, Session } from "@spacebar/database";
+ import { DiscordApiErrors, GuildUpdateEvent, Permissions, SpacebarApiErrors, emitEvent, getPermission, getRights, handleFile } from "@spacebar/util";
+ import { GuildCreateResponse, GuildUpdateSchema } from "@spacebar/schemas";
+ 
+@@ -28,6 +28,12 @@ const router = Router({ mergeParams: true });
+ router.get(
+     "/",
+     route({
++        query: {
++            with_counts: {
++                type: "boolean",
++                description: "when true, adds approximate_member_count and approximate_presence_count",
++            },
++        },
+         responses: {
+             "200": {
+                 body: "APIGuildWithJoinedAt",
+@@ -46,9 +52,25 @@ router.get(
+         const [guild, member] = await Promise.all([Guild.findOneOrFail({ where: { id: guild_id } }), Member.findOne({ where: { guild_id: guild_id, id: req.user_id } })]);
+         if (!member) throw new HTTPError("You are not a member of the guild you are trying to access", 401);
+ 
++        let counts = {};
++        if (String(req.query.with_counts) === "true") {
++            const [memberCount, present] = await Promise.all([
++                Member.count({ where: { guild_id } }),
++                // members with a session whose presence shows: the filter IDENTIFY applies to presences
++                Member.createQueryBuilder("member")
++                    .innerJoin(Session, "session", "session.user_id = member.id AND session.is_admin_session = false")
++                    .where("member.guild_id = :guild_id", { guild_id })
++                    .andWhere("session.status NOT IN (:...hidden)", { hidden: ["offline", "invisible", "unknown"] })
++                    .select("COUNT(DISTINCT member.id)", "count")
++                    .getRawOne<{ count: string }>(),
++            ]);
++            counts = { approximate_member_count: memberCount, approximate_presence_count: Number(present?.count ?? 0) };
++        }
++
+         return res.send({
+             ...guild,
+             joined_at: member?.joined_at,
++            ...counts,
+         });
+     },
+ );
+diff --git a/src/api/routes/guilds/#guild_id/members/#member_id/index.ts b/src/api/routes/guilds/#guild_id/members/#member_id/index.ts
+index d687981..ef35e15 100644
+--- a/src/api/routes/guilds/#guild_id/members/#member_id/index.ts
++++ b/src/api/routes/guilds/#guild_id/members/#member_id/index.ts
+@@ -43,7 +43,7 @@ router.get(
+         const { guild_id, member_id } = req.params as { [key: string]: string };
+         await Member.IsInGuildOrFail(req.user_id, guild_id);
+ 
+-        const member = await Member.findOneOrFail({
++        const member = await Member.findOne({
+             where: { id: member_id, guild_id },
+             relations: { roles: true, user: true },
+             select: {
+@@ -57,6 +57,7 @@ router.get(
+                 },
+             },
+         });
++        if (!member) throw DiscordApiErrors.UNKNOWN_MEMBER;
+ 
+         return res.json({
+             ...member.toPublicMember(),
+diff --git a/src/api/routes/guilds/#guild_id/members/index.ts b/src/api/routes/guilds/#guild_id/members/index.ts
+index ba8f4b3..4acddf9 100644
+--- a/src/api/routes/guilds/#guild_id/members/index.ts
++++ b/src/api/routes/guilds/#guild_id/members/index.ts
+@@ -21,7 +21,8 @@ import { HTTPError } from "lambert-server/HTTPError";
+ import { MoreThan } from "typeorm";
+ import { route } from "@spacebar/api/middlewares";
+ import { Member } from "@spacebar/database";
+-import { PublicMemberProjection } from "@spacebar/schemas";
++import { PublicMemberProjection, PublicUserProjection } from "@spacebar/schemas";
++import { FieldErrors } from "@spacebar/util";
+ 
+ const router = Router({ mergeParams: true });
+ 
+@@ -38,6 +39,7 @@ router.get(
+             },
+             after: {
+                 type: "string",
++                description: "the highest user id in the previous page. default 0",
+             },
+         },
+         responses: {
+@@ -53,14 +55,22 @@ router.get(
+         const { guild_id } = req.params as { [key: string]: string };
+         const limit = Number(req.query.limit) || 1;
+         if (limit > 1000 || limit < 1) throw new HTTPError("Limit must be between 1 and 1000");
+-        const after = `${req.query.after}`;
+-        const query = after ? { id: MoreThan(after) } : {};
++        // An absent `after` used to become the string "undefined", which the bigint column refused with a 500.
++        const after = req.query.after === undefined ? "0" : String(req.query.after);
++        if (!/^\d+$/.test(after)) throw FieldErrors({ after: { code: "NUMBER_TYPE_COERCE", message: `Value "${after}" is not snowflake.` } });
+ 
+         await Member.IsInGuildOrFail(req.user_id, guild_id);
+ 
++        // Paged by user id, ascending: a caller passes the highest user.id it has seen as the next `after`.
+         const members = await Member.find({
+-            where: { guild_id, ...query },
+-            select: Object.fromEntries(PublicMemberProjection.map((i) => [i, true])), // TODO: cleanup
++            where: { guild_id, id: MoreThan(after) },
++            relations: { user: true, roles: true },
++            select: {
++                index: true,
++                ...Object.fromEntries(PublicMemberProjection.map((i) => [i, true])),
++                user: Object.fromEntries(PublicUserProjection.map((x) => [x, true])),
++                roles: { id: true },
++            },
+             take: limit,
+             order: { id: "ASC" },
+         });
+diff --git a/src/util/util/Constants.ts b/src/util/util/Constants.ts
+index cdd0ce7..0300968 100644
+--- a/src/util/util/Constants.ts
++++ b/src/util/util/Constants.ts
+@@ -544,7 +544,7 @@ export const DiscordApiErrors = {
+         return new ApiError("Unknown invite", 10006);
+     },
+     get UNKNOWN_MEMBER() {
+-        return new ApiError("Unknown member", 10007);
++        return new ApiError("Unknown member", 10007, 404);
+     },
+     get UNKNOWN_MESSAGE() {
+         return new ApiError("Unknown message", 10008);
+@@ -580,7 +580,7 @@ export const DiscordApiErrors = {
+         return new ApiError("Unknown session", 10020);
+     },
+     get UNKNOWN_BAN() {
+-        return new ApiError("Unknown ban", 10026);
++        return new ApiError("Unknown ban", 10026, 404);
+     },
+     get UNKNOWN_SKU() {
+         return new ApiError("Unknown SKU", 10027);
+-- 
+2.54.0 (Apple Git-157)
+

@@ -215,6 +215,25 @@ try {
   const dmAC = await must(A, 'POST', '/users/@me/channels', { recipients: [C.id] })
   check('after a kick, a new DM still reaches the member (0004; guard against the user listener being cancelled)', true,
     await arrives(sC, 'CHANNEL_CREATE', (d) => d.id === dmAC.id))
+
+  // ── Guild reads a Discord bot relies on (C is now kicked, never banned) ─────────────────────
+  const answer = (r) => `${r.status} ${r.json?.code}`
+  check('a ban that does not exist is 404 Unknown Ban (0007)', '404 10026', answer(await api(A, 'GET', `/guilds/${guild.id}/bans/${C.id}`)))
+  check('a user who is not a member is 404 Unknown Member (0007)', '404 10007', answer(await api(A, 'GET', `/guilds/${guild.id}/members/${C.id}`)))
+  const byUserId = [A.id, B.id].sort((x, y) => (BigInt(x) < BigInt(y) ? -1 : 1)).join(',')
+  const listed = await api(A, 'GET', `/guilds/${guild.id}/members?limit=1000`)
+  check('the member list with no `after` lists every member\'s user.id by user id (0007)', byUserId,
+    Array.isArray(listed.json) ? listed.json.map((m) => m.user?.id).join(',') : `${listed.status}`)
+  const walked = []
+  for (let after = '0', page = 0; page < 5; page++) {
+    const r = await api(A, 'GET', `/guilds/${guild.id}/members?limit=1&after=${after}`)
+    if (!Array.isArray(r.json) || r.json.length === 0 || !r.json[0].user?.id) break
+    walked.push((after = r.json[0].user.id))
+  }
+  check('the member list pages by `after` = the last user.id (0007)', byUserId, walked.join(','))
+  const counted = await api(A, 'GET', `/guilds/${guild.id}?with_counts=true`)
+  check('with_counts adds approximate_member_count (0007)', 2, counted.json?.approximate_member_count)
+  check('with_counts adds approximate_presence_count (0007)', 'number', typeof counted.json?.approximate_presence_count)
 } catch (err) {
   console.log(`ERROR ${err.stack}`)
   failures.push('the probe itself')

@@ -40,6 +40,13 @@ Spacebar here (and upstream) parses request bodies with `JSON.parse`, not json-b
 `bigint` schema type. The build runs `npm ci` with `CI=true`, so a patch-package patch that stops applying
 fails the build instead of shipping without it.
 
+`0007` makes four guild reads answer as Discord's do, for a bot written against Discord's API: a missing
+ban (or a self-ban) is 404 with code 10026, and a user who is not a member is 404 with code 10007, where
+Spacebar answered 404 with code 404 (and 400 for a self-ban). `GET /guilds/{id}/members` carries each
+member's `user` and role ids and pages by user id from `after`, which defaults to 0 (with no `after` it
+answered 500). `GET /guilds/{id}?with_counts=true` adds `approximate_member_count` and
+`approximate_presence_count`. It is written to be offered upstream as it stands.
+
 `test/channel-events.mjs` holds a check for each: upstream at the pinned commit fails every patch's
 checks, and this image passes them all.
 
