@@ -1,0 +1,37 @@
+From 655276768b32b36a0e0290e13330cdd14223d4ad Mon Sep 17 00:00:00 2001
+From: Crit-Fumble <noreply@crit-fumble.com>
+Date: Thu, 5 Nov 2026 18:42:32 -0600
+Subject: [PATCH] fix(api): unbanning a user with no ban answers 404 Unknown
+ Ban like Discord
+
+DELETE /guilds/:id/bans/:user_id for a user with no ban answered 404 with
+code 404 ("Ban could not be found", from findOneOrFail), where Discord
+answers 404 with code 10026 Unknown Ban, as GET /guilds/:id/bans/:user_id
+does. A bot written against Discord's API reads 10026 as "nothing to lift"
+and any other answer as a failed unban. An existing ban still deletes with
+204 and emits GUILD_BAN_REMOVE.
+
+It builds on the previous commit, which gives UNKNOWN_BAN HTTP 404.
+---
+ src/api/routes/guilds/#guild_id/bans.ts | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/api/routes/guilds/#guild_id/bans.ts b/src/api/routes/guilds/#guild_id/bans.ts
+index 7eb0af7..45cf0ed 100644
+--- a/src/api/routes/guilds/#guild_id/bans.ts
++++ b/src/api/routes/guilds/#guild_id/bans.ts
+@@ -265,9 +265,10 @@ router.delete(
+     async (req: Request, res: Response) => {
+         const { guild_id, user_id } = req.params as { [key: string]: string };
+ 
+-        await Ban.findOneOrFail({
++        const ban = await Ban.findOne({
+             where: { guild_id: guild_id, user_id: user_id },
+         });
++        if (!ban) throw DiscordApiErrors.UNKNOWN_BAN;
+ 
+         const banned_user = await User.getPublicUser(user_id);
+ 
+-- 
+2.54.0 (Apple Git-157)
+
