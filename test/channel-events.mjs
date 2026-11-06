@@ -234,6 +234,13 @@ try {
   const counted = await api(A, 'GET', `/guilds/${guild.id}?with_counts=true`)
   check('with_counts adds approximate_member_count (0007)', 2, counted.json?.approximate_member_count)
   check('with_counts adds approximate_presence_count (0007)', 'number', typeof counted.json?.approximate_presence_count)
+
+  // ── Unbans a Discord bot relies on (B is banned here, so this section comes last) ───────────
+  check('unbanning a user with no ban is 404 Unknown Ban (0008)', '404 10026', answer(await api(A, 'DELETE', `/guilds/${guild.id}/bans/${C.id}`)))
+  await must(A, 'PUT', `/guilds/${guild.id}/bans/${B.id}`, {})
+  check('a banned member\'s ban reads back before the unban', 200, (await api(A, 'GET', `/guilds/${guild.id}/bans/${B.id}`)).status)
+  check('unbanning a banned user deletes the ban with 204 (guard)', 204, (await api(A, 'DELETE', `/guilds/${guild.id}/bans/${B.id}`)).status)
+  check('a lifted ban is gone afterwards', '404 10026', answer(await api(A, 'GET', `/guilds/${guild.id}/bans/${B.id}`)))
 } catch (err) {
   console.log(`ERROR ${err.stack}`)
   failures.push('the probe itself')

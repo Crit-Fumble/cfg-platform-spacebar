@@ -47,6 +47,10 @@ member's `user` and role ids and pages by user id from `after`, which defaults t
 answered 500). `GET /guilds/{id}?with_counts=true` adds `approximate_member_count` and
 `approximate_presence_count`. It is written to be offered upstream as it stands.
 
+`0008` does the same for the unban: `DELETE /guilds/{id}/bans/{user_id}` for a user with no ban is 404 with
+code 10026, where Spacebar answered 404 with code 404; an existing ban still deletes with 204. It needs
+`0007`, which gives that code its 404, and is offered upstream with it.
+
 `test/channel-events.mjs` holds a check for each: upstream at the pinned commit fails every patch's
 checks, and this image passes them all.
 
