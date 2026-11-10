@@ -241,6 +241,57 @@ try {
   check('a banned member\'s ban reads back before the unban', 200, (await api(A, 'GET', `/guilds/${guild.id}/bans/${B.id}`)).status)
   check('unbanning a banned user deletes the ban with 204 (guard)', 204, (await api(A, 'DELETE', `/guilds/${guild.id}/bans/${B.id}`)).status)
   check('a lifted ban is gone afterwards', '404 10026', answer(await api(A, 'GET', `/guilds/${guild.id}/bans/${B.id}`)))
+
+  // ── Handing a guild over, and deleting an account that left things behind (0009, 0010) ─────
+  const D = await register(`${tag}d`) // owns a guild, hands it to E, then deletes their account
+  const E = await register(`${tag}e`) // the member who takes the guild over
+  const F = await register(`${tag}f`) // never a member
+  const G = await register(`${tag}g`) // an admin who starts a thread, uploads an emoji, bans, owns a group DM
+  const H = await register(`${tag}h`) // the member G bans
+  const g2 = await must(D, 'POST', '/guilds', { name: `handover ${tag}` })
+  const g2general = (await must(D, 'GET', `/guilds/${g2.id}/channels`)).find((c) => c.type === GUILD_TEXT)
+  const g2invite = await must(D, 'POST', `/channels/${g2general.id}/invites`, { max_age: 600 })
+  for (const u of [E, G, H]) await must(u, 'POST', `/invites/${g2invite.code}`, {})
+  const MANAGE_GUILD = String(1 << 5)
+  const ADMINISTRATOR = String(1 << 3)
+  const managers = await must(D, 'POST', `/guilds/${g2.id}/roles`, { name: 'managers', permissions: MANAGE_GUILD })
+  const admins = await must(D, 'POST', `/guilds/${g2.id}/roles`, { name: 'admins', permissions: ADMINISTRATOR })
+  await must(D, 'PUT', `/guilds/${g2.id}/members/${E.id}/roles/${managers.id}`)
+  await must(D, 'PUT', `/guilds/${g2.id}/members/${G.id}/roles/${admins.id}`)
+  const sE = await gateway(E); sessions.push(sE)
+  const ownerOf = async () => (await api(D, 'GET', `/guilds/${g2.id}`)).json?.owner_id ?? (await api(E, 'GET', `/guilds/${g2.id}`)).json?.owner_id
+
+  const byManager = await api(E, 'PATCH', `/guilds/${g2.id}`, { owner_id: E.id })
+  check('a member with Manage Server who is not the owner cannot take the guild (0009)', '50013', `${byManager.json?.code}`)
+  check('the guild keeps its owner after a refused transfer (0009)', D.id, await ownerOf())
+  check('a transfer to a user who is not a member is 404 Unknown Member (0009)', '404 10007',
+    answer(await api(D, 'PATCH', `/guilds/${g2.id}`, { owner_id: F.id })))
+  const handed = await api(D, 'PATCH', `/guilds/${g2.id}`, { owner_id: E.id })
+  check('the owner hands the guild to a member (0009)', `200 ${E.id}`, `${handed.status} ${handed.json?.owner_id}`)
+  check('the new owner reads back (0009)', E.id, await ownerOf())
+  check('the new owner gets GUILD_UPDATE naming them (0009)', true,
+    await arrives(sE, 'GUILD_UPDATE', (d) => d.id === g2.id && d.owner_id === E.id))
+  check('the former owner can then delete their account (0009)', 204,
+    (await api(D, 'POST', '/users/@me/delete', { password: PASSWORD })).status)
+
+  const gThread = await must(G, 'POST', `/channels/${g2general.id}/threads`, { name: 'g-thread', type: PUBLIC_THREAD })
+  const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+  const gEmoji = await must(G, 'POST', `/guilds/${g2.id}/emojis`, { name: `e${tag}`.slice(0, 32), image: PIXEL, roles: [] })
+  await must(G, 'PUT', `/guilds/${g2.id}/bans/${H.id}`, {})
+  const gGroup = await must(G, 'POST', '/users/@me/channels', { recipients: [E.id, H.id] })
+  check('a user who started a thread, uploaded an emoji, banned someone and owns a group DM deletes their account (0010)', 204,
+    (await api(G, 'POST', '/users/@me/delete', { password: PASSWORD })).status)
+  check('the deleted account cannot sign in (0010)', 400,
+    (await api(null, 'POST', '/auth/login', { login: `${G.name}@smoke.local`, password: PASSWORD })).status)
+  const threadAfter = await api(E, 'GET', `/channels/${gThread.id}`)
+  check('their thread stays, with no owner (0010)', '200 null', `${threadAfter.status} ${threadAfter.json?.owner_id ?? null}`)
+  const emojisAfter = await api(E, 'GET', `/guilds/${g2.id}/emojis`)
+  check('their emoji stays (0010)', true, Array.isArray(emojisAfter.json) && emojisAfter.json.some((e) => e.id === gEmoji.id))
+  check('their ban stays (0010)', 200, (await api(E, 'GET', `/guilds/${g2.id}/bans/${H.id}`)).status)
+  const groupAfter = await api(E, 'GET', `/channels/${gGroup.id}`)
+  check('their group DM stays for the others, without them (0010)', `200 false`,
+    `${groupAfter.status} ${(groupAfter.json?.recipients ?? []).some((r) => r.id === G.id)}`)
+  check('their group DM passes to another recipient (0010)', true, [E.id, H.id].includes(groupAfter.json?.owner_id))
 } catch (err) {
   console.log(`ERROR ${err.stack}`)
   failures.push('the probe itself')

@@ -1,0 +1,84 @@
+From 0994a3e2d76da3ce9169b8488a4a3f033f7a82e7 Mon Sep 17 00:00:00 2001
+From: Crit-Fumble <noreply@crit-fumble.com>
+Date: Mon, 9 Nov 2026 22:38:03 -0600
+Subject: [PATCH 10/10] fix(api): deleting an account releases the rows that
+ only name it
+
+POST /users/@me/delete answered 500 for anyone who had started a thread,
+owned a group DM, uploaded an emoji or issued a ban: those columns
+(channels.owner_id, emojis.user_id, bans.executor_id, and likewise
+templates.creator_id, teams.owner_user_id and both audit_logs user columns)
+reference users with ON DELETE NO ACTION, so the delete hit a foreign key
+error after the memberships were already gone.
+
+The delete now releases those references first. The rows stay, since they
+belong to the guilds and to the other people in them: a group DM passes to
+another recipient, as leaving it does, and every other reference becomes
+null (each column is nullable already). Guild owners are still refused
+with 403; transfer the guild first.
+---
+ src/api/routes/users/@me/delete.ts | 33 +++++++++++++++++++++++++++++-
+ 1 file changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/src/api/routes/users/@me/delete.ts b/src/api/routes/users/@me/delete.ts
+index e088790..9471baf 100644
+--- a/src/api/routes/users/@me/delete.ts
++++ b/src/api/routes/users/@me/delete.ts
+@@ -17,10 +17,12 @@
+ */
+ 
+ import bcrypt from "bcrypt";
++import { Not } from "typeorm";
+ import { Request, Response, Router } from "express";
+ import { HTTPError } from "lambert-server/HTTPError";
+ import { route } from "@spacebar/api/middlewares";
+-import { Guild, Member, User, UserSettingsProtos } from "@spacebar/database";
++import { AuditLog, Ban, Channel, Emoji, Guild, Member, Recipient, Team, Template, User, UserSettingsProtos } from "@spacebar/database";
++import { ChannelType } from "@spacebar/schemas";
+ 
+ const router = Router({ mergeParams: true });
+ 
+@@ -61,6 +63,8 @@ router.post(
+                 throw new HTTPError("User owns guilds and cannot be deleted", 403);
+             }
+ 
++            await releaseReferences(req.user_id);
++
+             const members = await Member.find({ where: { id: req.user_id } });
+             await UserSettingsProtos.delete({ user_id: req.user_id });
+             await Promise.all([User.delete({ id: req.user_id }), ...members.map((member) => Member.removeFromGuild(member.id, member.guild_id))]);
+@@ -72,4 +76,31 @@ router.post(
+     },
+ );
+ 
++/** Sets a column to SQL NULL: the entities type these optional ids as `string`, not `string | null`. */
++const NULL = () => "NULL";
++
++/**
++ * Rows that name the user but belong to others (a thread they started, an emoji they uploaded, a ban
++ * they issued, a group DM they own, a template or team they made, an audit log entry) reference
++ * users with ON DELETE NO ACTION, so deleting the user failed with a foreign key error. Those rows
++ * stay and only lose the reference: a group DM passes to another recipient, as leaving it does on
++ * Discord, and every other reference becomes null.
++ */
++async function releaseReferences(user_id: string) {
++    const groupDms = await Channel.find({ where: { type: ChannelType.GROUP_DM, owner_id: user_id } });
++    for (const channel of groupDms) {
++        const heir = await Recipient.findOne({ where: { channel_id: channel.id, user_id: Not(user_id) } });
++        await Channel.update({ id: channel.id }, { owner_id: heir ? heir.user_id : NULL });
++    }
++    await Promise.all([
++        Channel.update({ owner_id: user_id }, { owner_id: NULL }),
++        Emoji.update({ user_id }, { user_id: NULL }),
++        Ban.update({ executor_id: user_id }, { executor_id: NULL }),
++        Template.update({ creator_id: user_id }, { creator_id: NULL }),
++        Team.update({ owner_user_id: user_id }, { owner_user_id: NULL }),
++        AuditLog.update({ user_id }, { user_id: NULL }),
++        AuditLog.createQueryBuilder().update().set({ target: NULL }).where("target_id = :user_id", { user_id }).execute(),
++    ]);
++}
++
+ export default router;
+-- 
+2.54.0 (Apple Git-157)
+

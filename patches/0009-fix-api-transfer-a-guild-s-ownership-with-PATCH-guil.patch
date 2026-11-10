@@ -1,0 +1,80 @@
+From 2bcb4c24bfe4ae01da6ab9bda9bf2ee33c8b7a59 Mon Sep 17 00:00:00 2001
+From: Crit-Fumble <noreply@crit-fumble.com>
+Date: Mon, 9 Nov 2026 22:34:36 -0600
+Subject: [PATCH 09/10] fix(api): transfer a guild's ownership with PATCH
+ /guilds/:id owner_id, as Discord's
+
+Discord transfers a guild with `owner_id` in the guild PATCH body. Spacebar's
+GuildUpdateSchema had no such field, so a transfer was refused as an unknown
+property, and with no other way to hand a guild over, its owner could never
+delete their account (POST /users/@me/delete refuses any guild owner).
+
+The field is accepted under Discord's rules: only the current owner may set
+it (anyone else: 50013 Missing Permissions), to a member of the guild
+(otherwise 404 10007 Unknown Member) who is not a bot (50132 Ownership cannot
+be transferred to a bot user). Setting it to the current owner changes
+nothing. The transfer saves and emits GUILD_UPDATE like any other edit.
+---
+ src/api/routes/guilds/#guild_id/index.ts       | 11 +++++++++++
+ src/schemas/uncategorised/GuildUpdateSchema.ts |  2 ++
+ src/util/util/Constants.ts                     |  4 ++++
+ 3 files changed, 17 insertions(+)
+
+diff --git a/src/api/routes/guilds/#guild_id/index.ts b/src/api/routes/guilds/#guild_id/index.ts
+index ac69657..1319cd4 100644
+--- a/src/api/routes/guilds/#guild_id/index.ts
++++ b/src/api/routes/guilds/#guild_id/index.ts
+@@ -144,6 +144,17 @@ router.patch(
+             guild.features = body.features;
+         }
+ 
++        // Ownership transfer, as Discord's: only the owner, and only to a member who is not a bot.
++        if (body.owner_id !== undefined && body.owner_id !== guild.owner_id) {
++            if (guild.owner_id !== req.user_id) throw DiscordApiErrors.MISSING_PERMISSIONS.withParams("OWNER");
++            const newOwner = await Member.findOne({
++                where: { id: body.owner_id, guild_id },
++                relations: { user: true },
++            });
++            if (!newOwner) throw DiscordApiErrors.UNKNOWN_MEMBER;
++            if (newOwner.user.bot) throw DiscordApiErrors.CANNOT_TRANSFER_OWNERSHIP_TO_BOT;
++        }
++
+         // TODO: check if body ids are valid
+         guild.assign(body);
+ 
+diff --git a/src/schemas/uncategorised/GuildUpdateSchema.ts b/src/schemas/uncategorised/GuildUpdateSchema.ts
+index c34c774..b1730c0 100644
+--- a/src/schemas/uncategorised/GuildUpdateSchema.ts
++++ b/src/schemas/uncategorised/GuildUpdateSchema.ts
+@@ -34,4 +34,6 @@ export interface GuildUpdateSchema extends Omit<GuildCreateSchema, "channels"> {
+     premium_progress_bar_enabled?: boolean;
+     discovery_splash?: string;
+     safety_alerts_channel_id?: string | null;
++    /** Transfers the guild: only its current owner may set it, to a member who is not a bot. */
++    owner_id?: string;
+ }
+diff --git a/src/util/util/Constants.ts b/src/util/util/Constants.ts
+index 0300968..ca811d3 100644
+--- a/src/util/util/Constants.ts
++++ b/src/util/util/Constants.ts
+@@ -499,6 +499,7 @@ export const VerificationLevels = ["NONE", "LOW", "MEDIUM", "HIGH", "VERY_HIGH"]
+  * * BEFORE_EARLIER_THAN_THREAD_CREATION_DATE
+  * * SERVER_NOT_AVAILABLE_IN_YOUR_LOCATION
+  * * SERVER_NEEDS_MONETIZATION_ENABLED
++ * * CANNOT_TRANSFER_OWNERSHIP_TO_BOT
+  * * TWO_FACTOR_REQUIRED
+  * * NO_USERS_WITH_DISCORDTAG_EXIST
+  * * REACTION_BLOCKED
+@@ -888,6 +889,9 @@ export const DiscordApiErrors = {
+     get SERVER_NEEDS_MONETIZATION_ENABLED() {
+         return new ApiError("This server needs monetization enabled in order to perform this action", 50097);
+     },
++    get CANNOT_TRANSFER_OWNERSHIP_TO_BOT() {
++        return new ApiError("Ownership cannot be transferred to a bot user", 50132);
++    },
+     get TWO_FACTOR_REQUIRED() {
+         return new ApiError("Two factor is required for this operation", 60003);
+     },
+-- 
+2.54.0 (Apple Git-157)
+

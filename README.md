@@ -51,6 +51,15 @@ answered 500). `GET /guilds/{id}?with_counts=true` adds `approximate_member_coun
 code 10026, where Spacebar answered 404 with code 404; an existing ban still deletes with 204. It needs
 `0007`, which gives that code its 404, and is offered upstream with it.
 
+`0009` adds Discord's guild transfer: `PATCH /guilds/{id}` with `owner_id`. Only the owner may set it
+(50013 for anyone else), to a member (404 10007 for anyone else) who is not a bot (50132). Spacebar refused
+the field, and with no other way to hand a guild over, its owner could never delete their account.
+
+`0010` lets `POST /users/@me/delete` finish for a user who started a thread, owns a group DM, uploaded an
+emoji or issued a ban. Those columns reference users with `ON DELETE NO ACTION`, so the delete answered
+500. The rows stay and lose the reference: a group DM passes to another recipient, every other reference
+becomes null. A guild owner is still refused with 403 until they transfer the guild with `0009`.
+
 `test/channel-events.mjs` holds a check for each: upstream at the pinned commit fails every patch's
 checks, and this image passes them all.
 
