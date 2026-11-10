@@ -14,6 +14,9 @@ port 3001. Unlike upstream's image, `node` is on `PATH`.
 
 ## The patches
 
+The patches are AGPL-3.0 like Spacebar itself. This project opens no upstream pull requests; anyone may
+copy a patch into Spacebar.
+
 `0001` to `0004` fix the same confusion in the gateway: an event's routing key (its guild, channel or user) is
 not always the thing the event is about. Each one is written to be offered upstream as it stands.
 
@@ -49,7 +52,7 @@ answered 500). `GET /guilds/{id}?with_counts=true` adds `approximate_member_coun
 
 `0008` does the same for the unban: `DELETE /guilds/{id}/bans/{user_id}` for a user with no ban is 404 with
 code 10026, where Spacebar answered 404 with code 404; an existing ban still deletes with 204. It needs
-`0007`, which gives that code its 404, and is offered upstream with it.
+`0007`, which gives that code its 404.
 
 `0009` adds Discord's guild transfer: `PATCH /guilds/{id}` with `owner_id`. Only the owner may set it
 (50013 for anyone else), to a member (404 10007 for anyone else) who is not a bot (50132). Spacebar refused
