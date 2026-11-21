@@ -34,16 +34,16 @@ session connected stays silent to it until a reconnect, as upstream.
 `0005` refreshes upstream's lockfile, inside the ranges its `package.json` allows, past the releases
 that fix the advisories in multer, body-parser, proxy-addr and undici. Upstream's master already
 carries those versions, so it is not offered upstream; it goes when `SPACEBAR_COMMIT` moves past them.
-Two advisories stay in `npm audit`, neither with a fix in range and neither reachable here: zod, through
+The advisories that stay in `npm audit` have no fix in range and are not reachable here: zod, through
 jimp, which only scales a proxied image to two integers; and nodemailer, since mail is off.
 
 `0006` removes upstream's own patch-package patches for body-parser and typescript-json-schema. They were
-made for 2.2.2 and 0.67.4 and have not applied since upstream's lockfile moved past those versions, so
+made for 2.2.2 and 0.67.4 and do not apply to the versions upstream's lockfile pins, so
 Spacebar here (and upstream) parses request bodies with `JSON.parse`, not json-bigint, and generates no
 `bigint` schema type. The build runs `npm ci` with `CI=true`, so a patch-package patch that stops applying
 fails the build instead of shipping without it.
 
-`0007` makes four guild reads answer as Discord's do, for a bot written against Discord's API: a missing
+`0007` makes these guild reads answer as Discord's do, for a bot written against Discord's API: a missing
 ban (or a self-ban) is 404 with code 10026, and a user who is not a member is 404 with code 10007, where
 Spacebar answered 404 with code 404 (and 400 for a self-ban). `GET /guilds/{id}/members` carries each
 member's `user` and role ids and pages by user id from `after`, which defaults to 0 (with no `after` it
@@ -63,8 +63,8 @@ emoji or issued a ban. Those columns reference users with `ON DELETE NO ACTION`,
 500. The rows stay and lose the reference: a group DM passes to another recipient, every other reference
 becomes null. A guild owner is still refused with 403 until they transfer the guild with `0009`.
 
-`test/channel-events.mjs` holds a check for each: upstream at the pinned commit fails every patch's
-checks, and this image passes them all.
+`test/channel-events.mjs` checks the patches; its header says what upstream at the pinned commit and this
+image each pass.
 
 ## Build and test it
 
@@ -83,7 +83,7 @@ its config (`test/spacebar-config.json`) advertises the compose-internal names `
 addresses your client can reach, mount it as `CONFIG_PATH`, and publish ports 3001 and 3002.
 Spacebar's own documentation covers the rest: <https://docs.spacebar.chat>.
 
-Two settings matter when the bundle and gateway run as separate containers, as here:
+These settings matter when the bundle and gateway run as separate containers, as here:
 - `EVENT_TRANSMISSION=unix` with the same `EVENT_SOCKET_PATH` on one shared volume in both;
 - `init: true` on the gateway and not on the bundle. The event socket is named by PID, and both node
   processes would otherwise be PID 1 and claim the same socket.

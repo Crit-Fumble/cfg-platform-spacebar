@@ -20,7 +20,7 @@ patch under `set -e`, so one that no longer applies stops the build. Rebase it, 
 upstream now carries the fix (`patches/.gitkeep` keeps the directory when none are left). Then run
 `test/run.sh`.
 
-The `node:24-slim` base is pinned by digest in both `FROM` lines; Dependabot proposes bumps.
+The `node:24-slim` base is pinned by digest in every `FROM` line; Dependabot proposes bumps.
 
 ## Releasing
 
